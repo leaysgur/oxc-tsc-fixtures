@@ -15,10 +15,12 @@ const DIAGNOSTIC_CODES_OXC_DOES_NOT_SUPPORT = new Set([
   2416, // Property 'every' in type 'MyArray<T>' is not assignable to the same property in base type 'T[]'.
   2580, // Cannot find name 'module'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
   2589, // Type instantiation is excessively deep and possibly infinite.
-  // 2792, // Cannot find module 'unkown'.
+  2792, // Cannot find module './file1'. Did you mean to set the 'moduleResolution' option to 'nodenext', or to add aliases to the 'paths' option?
 ]);
 
 // TODO: Make it parallel!
+
+// TODO: Correct support codes and log it for future update
 
 const {
   TestCaseParser: { makeUnitsFromTest },
@@ -51,9 +53,10 @@ for (const testCategory of ["compiler"]) {
           // TODO: This is "Expect to parse" case, save path+idx, or write content to the disk?
           debugLog("✨", testUnit.name);
         } else {
+          debugErr("💥", testUnit.name);
           // TODO: This is "Expect Syntax Error" case, save path+idx, or write content to the disk?
           for (const [code, message] of errorDiagnostics)
-            debugErr("💥", `TS${code}: ${message}`);
+            debugErr("  ", `${code}, // ${message}`);
         }
       } catch (err) {
         // NOTE: If `@types` options is used, TSC try to load it's type definitions.
@@ -79,6 +82,8 @@ function debugErr(...args: any[]) {
 // NOTE: `@ts-morph/bootstrap` is the most handy, but we should consider using `typescript` or `typescript-go`?
 // `typescript` is not a peer dependency of `@ts-morph/bootstrap`, so its version is uncontrollable for us.
 import { createProject, ts } from "@ts-morph/bootstrap";
+// TODO: Print it
+ts.version;
 
 // `filename` may be
 async function parseTypeScriptLikeOxc(filename: string, code: string) {
@@ -111,35 +116,11 @@ async function parseTypeScriptLikeOxc(filename: string, code: string) {
 
     errorDiagnosticsToBeVerified.set(
       diagnostic.code,
-      project.formatDiagnosticsWithColorAndContext([diagnostic]).split("\n")[0],
+      typeof diagnostic.messageText === "string"
+        ? diagnostic.messageText
+        : diagnostic.messageText.messageText,
     );
   }
 
   return errorDiagnosticsToBeVerified;
 }
-
-// If test case is expecting error, it should have a corresponding `.errors.txt` file.
-//
-// Most simple case is the same name as the test file with `.errors.txt` suffix.
-// - tests/cases/compiler/yieldStringLiteral.ts
-// - tests/baselines/reference/yieldStringLiteral.errors.txt
-//
-// Single test case may have multiple error files by options.
-// - verbatimModuleSyntaxRestrictionsESM(esmoduleinterop=false).errors.txt
-// - verbatimModuleSyntaxRestrictionsESM(esmoduleinterop=true).errors.txt
-//
-// And options can be appeared multiple times.
-// - importMeta(module=commonjs,target=es5).errors.txt
-// - importMeta(module=commonjs,target=esnext).errors.txt
-// - importMeta(module=es2020,target=es5).errors.txt
-// - importMeta(module=es2020,target=esnext).errors.txt
-// - importMeta(module=esnext,target=es5).errors.txt
-// - importMeta(module=esnext,target=esnext).errors.txt
-// - importMeta(module=system,target=es5).errors.txt
-// - importMeta(module=system,target=esnext).errors.txt
-// const errorTextPaths = await glob(`*.errors.txt`, {
-//   cwd: "./tests/baselines/reference",
-// });
-// errorTextPaths.sort();
-
-// console.log(errorTextPaths.length);
