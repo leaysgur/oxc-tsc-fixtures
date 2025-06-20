@@ -1,0 +1,23 @@
+{
+  "name": "oxc-tsc-fixtures",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generate TypeScriptCompiler test fixtures for OXC.",
+  "homepage": "https://github.com/leaysgur/oxc-tsc-fixtures#readme",
+  "bugs": {
+    "url": "https://github.com/leaysgur/oxc-tsc-fixtures/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leaysgur/oxc-tsc-fixtures.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@ts-morph/bootstrap": "^0.27.0",
+    "tinyglobby": "^0.2.14"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.3"
+  }
+}
