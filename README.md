@@ -41,8 +41,7 @@ Outputs are placed in `./fixtures/(compiler|conformance)/(positive|negative)`.
 
 ## TODOs
 
-- Implement base
-  - Save supported error codes
+- Perf...
 - Use `oxc-parser` w/ `checkSemantic: true` and precheck before integrating `oxc` repo
   - Parsed: passed + failed_not_panic / all_passed
   - Positive: passed / all_passed
