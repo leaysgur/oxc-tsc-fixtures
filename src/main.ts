@@ -45,12 +45,20 @@ for (const testCategory of TEST_CATEGORIES) {
 
 // TODO: Make it parallel!
 
+const reports: Record<string, any> = {};
 const supportedErrorDiagnostics = new Map<number, string>();
 for (const testCategory of TEST_CATEGORIES) {
-  console.log("🍀", `Processing tests for "${testCategory}"`);
-
   const cwd = `${TYPESCRIPT_REPO_ROOT}/tests/cases/${testCategory}`;
   const testFileNames = await glob(`**/*`, { cwd });
+  console.log(
+    "🍀",
+    `Processing test cases for "${testCategory}", ${testFileNames.length} items are found`,
+  );
+
+  const stats = {
+    positive: 0,
+    negative: 0,
+  };
   for (const testFileName of testFileNames) {
     const testText = await fs.readFile(path.resolve(cwd, testFileName), "utf8");
     const testUnits = makeUnitsFromTest(testText, testFileName);
@@ -60,13 +68,17 @@ for (const testCategory of TEST_CATEGORIES) {
       name: testUnitName,
       content: testUnitContent,
     } of testUnits.testUnitData) {
-      if (testUnitName.endsWith(".d.ts") || testUnitName.endsWith(".json")) {
+      // This is `undefined` if multiple `@filename` are used...
+      if (typeof testUnitContent !== "string") continue;
+      if (
+        [".d.ts", ".json", ".map"].some((ext) => testUnitName.endsWith(ext))
+      ) {
         debugLog("🍃", testUnitName);
         continue;
       }
       debugAssert(
-        [".js", ".ts", ".jsx", ".tsx"].some((ext) =>
-          testUnitName.endsWith(ext),
+        [".js", ".ts", ".cts", ".mts", ".cjs", ".mjs", ".jsx", ".tsx"].some(
+          (ext) => testUnitName.endsWith(ext),
         ),
         `Unexpected test unit extension: ${testUnitName}`,
       );
@@ -87,22 +99,25 @@ for (const testCategory of TEST_CATEGORIES) {
       const errorDiagnosticsToBeSupported =
         extractErrorDiagnosticsToBeSupported(diagnostics);
 
+      // Both `testFileName` and `testUnitName` may contain `/`, but we don't care, just flatten them
       const fixtureName = `${testFileName}/${testUnitName}`.replaceAll(
         "/",
         "___",
       );
       if (errorDiagnosticsToBeSupported.size === 0) {
+        debugLog("✨", testUnitName);
         await fs.writeFile(
           `./fixtures/${testCategory}/positive/${fixtureName}`,
           testUnitContent,
         );
-        debugLog("✨", testUnitName);
+        stats.positive++;
       } else {
+        debugErr("💥", testUnitName);
         await fs.writeFile(
           `./fixtures/${testCategory}/negative/${fixtureName}`,
           testUnitContent,
         );
-        debugErr("💥", testUnitName);
+        stats.negative++;
 
         for (const [code, message] of errorDiagnosticsToBeSupported)
           supportedErrorDiagnostics.set(code, message);
@@ -110,7 +125,11 @@ for (const testCategory of TEST_CATEGORIES) {
     }
     debugLog();
   }
+
+  reports[testCategory] = stats;
 }
+console.log("🍀", "Fixtures are written to `./fixtures`");
+console.log(reports);
 
 // TODO: Save supportted codes and log it for future update
 console.log("🍀", "Writing supported error diagnostics");
