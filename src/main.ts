@@ -68,20 +68,10 @@ for (const testCategory of TEST_CATEGORIES) {
       name: testUnitName,
       content: testUnitContent,
     } of testUnits.testUnitData) {
-      // This is `undefined` if multiple `@filename` are used...
-      if (typeof testUnitContent !== "string") continue;
-      if (
-        [".d.ts", ".json", ".map"].some((ext) => testUnitName.endsWith(ext))
-      ) {
-        debugLog("🍃", testUnitName);
+      if (!isSupportedTestUnit(testUnitName, testUnitContent)) {
+        debugLog("💤", testUnitName);
         continue;
       }
-      debugAssert(
-        [".js", ".ts", ".cts", ".mts", ".cjs", ".mjs", ".jsx", ".tsx"].some(
-          (ext) => testUnitName.endsWith(ext),
-        ),
-        `Unexpected test unit extension: ${testUnitName}`,
-      );
 
       let diagnostics: ts.Diagnostic[] = [];
       try {
@@ -89,9 +79,13 @@ for (const testCategory of TEST_CATEGORIES) {
           testUnitName,
           testUnitContent,
         );
-      } catch (err) {
-        // NOTE: If `@types` options is used, TSC try to load it's type definitions.
-        // if (err.message.startsWith("Directory not found:")) continue;
+      } catch (_err) {
+        const err = _err as Error;
+        // NOTE: If `@types` options is used, TSC try to load it's type definitions!
+        if (err.message.startsWith("Directory not found:")) continue;
+        // TODO: これは例外処理しないとだめ？そもそもロードしないようにできない？
+        // e.g. moduleResolution/resolutionModeTripleSlash1.ts
+        // これ、関数の中に入れてもいい
         console.error("[parseTypeScriptLikeOxc()]", err.message);
         process.exit(1);
       }
@@ -131,8 +125,11 @@ for (const testCategory of TEST_CATEGORIES) {
 console.log("🍀", "Fixtures are written to `./fixtures`");
 console.log(reports);
 
+console.log(
+  "🍀",
+  `Writing supported ${supportedErrorDiagnostics.size} error diagnostics`,
+);
 // TODO: Save supportted codes and log it for future update
-console.log("🍀", "Writing supported error diagnostics");
 console.log("```js");
 for (const [code, message] of Array.from(supportedErrorDiagnostics).sort(
   ([a], [b]) => a - b,
@@ -142,19 +139,38 @@ console.log("```");
 
 // ---
 
-async function parseTypeScriptLikeOxc(filename: string, code: string) {
+function isSupportedTestUnit(fileName: string, fileContent: string) {
+  // This is `undefined` if multiple `@filename` are used...
+  if (typeof fileContent !== "string") return false;
+  if (fileContent.trim() === "") return false;
+
+  // Skip if the test unit is not a TypeScript-like file
+  if (fileName.endsWith(".d.ts")) return false;
+  if (
+    ![".js", ".ts", ".cts", ".mts", ".cjs", ".mjs", ".jsx", ".tsx"].some(
+      (ext) => fileName.endsWith(ext),
+    )
+  )
+    return false;
+
+  return true;
+}
+
+async function parseTypeScriptLikeOxc(testUnitName: string, code: string) {
+  const ext = path.extname(testUnitName);
+
   const project = await createProject({
     useInMemoryFileSystem: true,
     // TODO: Consider other options later for faster parsing
     compilerOptions: {
       // OXC has no option equivalent, always parses the latest syntax
       target: ts.ScriptTarget.ESNext,
-      jsx: filename.endsWith(".tsx") ? ts.JsxEmit.Preserve : ts.JsxEmit.None,
+      jsx: ext.endsWith("x") ? ts.JsxEmit.Preserve : ts.JsxEmit.None,
       // TODO: Add more options...?
     },
   });
 
-  project.createSourceFile(filename, code);
+  project.createSourceFile(`dummy${ext}`, code);
   const program = project.createProgram();
 
   // `ts.getPreEmitDiagnostics()` contains more diagnotics, but we do not need them
@@ -190,9 +206,4 @@ function debugLog(...args: any[]) {
 }
 function debugErr(...args: any[]) {
   if (ENABLE_DEBUG) console.error(...args);
-}
-function debugAssert(cond: boolean, message: string) {
-  if (!ENABLE_DEBUG || cond) return;
-  console.error("[Assertion failed]", message);
-  process.exit(1);
 }
