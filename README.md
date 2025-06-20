@@ -31,20 +31,18 @@ Generate TypeScriptCompiler test fixtures for OXC.
 ```sh
 npx tsx src/main.ts
 
-# With debug log
-DEBUG=1 npx tsx src/main.ts
+# With options
+DEBUG=1 TS_REPO_DIR=../TypeScript npx tsx src/main.ts
 ```
 
-Outputs are placed in `./tests/(compiler|conformance)/(positive|negative)`.
+Outputs are placed in `./fixtures/(compiler|conformance)/(positive|negative)`.
 
 ## TODOs
 
 - Implement base
-  - Correct positive tests
-  - Correct negative tests
-  - Handle error codes
+  - Save supported error codes
 - Use `oxc-parser` w/ `checkSemantic: true` and precheck before integrating `oxc` repo
   - Parsed: passed + failed_not_panic / all_passed
   - Positive: passed / all_passed
   - Negative: failed / all_failed
-- List more ignorable error codes
+- List more unspported error codes
