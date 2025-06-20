@@ -1,91 +1,128 @@
-import { resolve } from "node:path";
-import { readFile } from "node:fs/promises";
+import path from "node:path";
+import fs from "node:fs/promises";
 import { glob } from "tinyglobby";
+// NOTE: `@ts-morph/bootstrap` is the most handy, but we should consider using `typescript` or `typescript-go`?
+// `typescript` is not a peer dependency of `@ts-morph/bootstrap`, so its version is uncontrollable for us.
+import { createProject, ts } from "@ts-morph/bootstrap";
 
-const ENABLE_DEBUG = process.env.DEBUG;
-
-const TYPESCRIPT_REPO_DIR = resolve("../TypeScript");
-
-// TODO: List all codes that OXC does not support, e.g. type-only diagnostics!
+// TODO: List all codes that OXC does not support!
+// e.g. Type-only, module resolution, etc...
 const DIAGNOSTIC_CODES_OXC_DOES_NOT_SUPPORT = new Set([
-  // 2304, // Cannot find name 'React'.
   2315, // Type 'U' is not generic.
   2322, // Type 'interfaceWithPublicAndOptional<number, string>' is not assignable to type '{ one: string; }'.
+  2339, // Property 'protectedMethod' does not exist on type 'never'.
+  2355, // A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.
   2403, // Subsequent variable declarations must have the same type.
   2416, // Property 'every' in type 'MyArray<T>' is not assignable to the same property in base type 'T[]'.
   2580, // Cannot find name 'module'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
   2589, // Type instantiation is excessively deep and possibly infinite.
   2792, // Cannot find module './file1'. Did you mean to set the 'moduleResolution' option to 'nodenext', or to add aliases to the 'paths' option?
+  2872, // This kind of expression is always truthy.
+  6053, // File '/declarations.d.ts' not found.
 ]);
+
+// ---
+
+console.log("🍀", "Reesolving environment variables and dependencies");
+const ENABLE_DEBUG = process.env.DEBUG ? true : false;
+const TS_REPO_DIR = process.env.TS_REPO_DIR ?? "./typescript";
+
+const TEST_CATEGORIES = ["compiler", "conformance"];
+const TYPESCRIPT_REPO_ROOT = path.resolve(TS_REPO_DIR);
+
+// NOTE: Should be rewritten by ourselves?
+const {
+  TestCaseParser: { makeUnitsFromTest },
+} = await import(`${TYPESCRIPT_REPO_ROOT}/src/harness/harnessIO`);
+console.log("🍀", "Using TS version:", ts.version);
+
+console.log("🍀", "Cleaning up previous test results");
+await fs.rm("./fixtures", { recursive: true, force: true });
+for (const testCategory of TEST_CATEGORIES) {
+  await fs.mkdir(`./fixtures/${testCategory}/positive`, { recursive: true });
+  await fs.mkdir(`./fixtures/${testCategory}/negative`, { recursive: true });
+}
 
 // TODO: Make it parallel!
 
-// TODO: Correct support codes and log it for future update
+const supportedErrorDiagnostics = new Map<number, string>();
+for (const testCategory of TEST_CATEGORIES) {
+  console.log("🍀", `Processing tests for "${testCategory}"`);
 
-const {
-  TestCaseParser: { makeUnitsFromTest },
-} = await import(`${TYPESCRIPT_REPO_DIR}/src/harness/harnessIO.ts`);
+  const cwd = `${TYPESCRIPT_REPO_ROOT}/tests/cases/${testCategory}`;
+  const testFileNames = await glob(`**/*`, { cwd });
+  for (const testFileName of testFileNames) {
+    const testText = await fs.readFile(path.resolve(cwd, testFileName), "utf8");
+    const testUnits = makeUnitsFromTest(testText, testFileName);
 
-console.time("Total");
-for (const testCategory of ["compiler"]) {
-  const cwd = `${TYPESCRIPT_REPO_DIR}/tests/cases/${testCategory}`;
-
-  const testFilePaths = await glob(`**/*`, { cwd });
-  for (const testFilePath of testFilePaths) {
-    const testText = await readFile(`${cwd}/${testFilePath}`, "utf8");
-    // TODO: This should be rewritten by ourselves?
-    const testUnits = makeUnitsFromTest(testText, testFilePath);
-
-    debugLog(`${testFilePath} - ${testUnits.testUnitData.length} unit(s)`);
-    for (const testUnit of testUnits.testUnitData) {
-      if (testUnit.name.endsWith(".d.ts") || testUnit.name.endsWith(".json")) {
-        debugLog("🍃", testUnit.name);
+    debugLog(`${testFileName} - ${testUnits.testUnitData.length} unit(s)`);
+    for (const {
+      name: testUnitName,
+      content: testUnitContent,
+    } of testUnits.testUnitData) {
+      if (testUnitName.endsWith(".d.ts") || testUnitName.endsWith(".json")) {
+        debugLog("🍃", testUnitName);
         continue;
       }
+      debugAssert(
+        [".js", ".ts", ".jsx", ".tsx"].some((ext) =>
+          testUnitName.endsWith(ext),
+        ),
+        `Unexpected test unit extension: ${testUnitName}`,
+      );
 
+      let diagnostics: ts.Diagnostic[] = [];
       try {
-        const errorDiagnostics = await parseTypeScriptLikeOxc(
-          testUnit.name,
-          testUnit.content,
+        diagnostics = await parseTypeScriptLikeOxc(
+          testUnitName,
+          testUnitContent,
         );
-
-        if (errorDiagnostics.size === 0) {
-          // TODO: This is "Expect to parse" case, save path+idx, or write content to the disk?
-          debugLog("✨", testUnit.name);
-        } else {
-          debugErr("💥", testUnit.name);
-          // TODO: This is "Expect Syntax Error" case, save path+idx, or write content to the disk?
-          for (const [code, message] of errorDiagnostics)
-            debugErr("  ", `${code}, // ${message}`);
-        }
       } catch (err) {
         // NOTE: If `@types` options is used, TSC try to load it's type definitions.
         // if (err.message.startsWith("Directory not found:")) continue;
-        console.error("Unexpected error on parse()", err.message);
+        console.error("[parseTypeScriptLikeOxc()]", err.message);
         process.exit(1);
+      }
+
+      const errorDiagnosticsToBeSupported =
+        extractErrorDiagnosticsToBeSupported(diagnostics);
+
+      const fixtureName = `${testFileName}/${testUnitName}`.replaceAll(
+        "/",
+        "___",
+      );
+      if (errorDiagnosticsToBeSupported.size === 0) {
+        await fs.writeFile(
+          `./fixtures/${testCategory}/positive/${fixtureName}`,
+          testUnitContent,
+        );
+        debugLog("✨", testUnitName);
+      } else {
+        await fs.writeFile(
+          `./fixtures/${testCategory}/negative/${fixtureName}`,
+          testUnitContent,
+        );
+        debugErr("💥", testUnitName);
+
+        for (const [code, message] of errorDiagnosticsToBeSupported)
+          supportedErrorDiagnostics.set(code, message);
       }
     }
     debugLog();
   }
 }
-console.timeEnd("Total");
+
+// TODO: Save supportted codes and log it for future update
+console.log("🍀", "Writing supported error diagnostics");
+console.log("```js");
+for (const [code, message] of Array.from(supportedErrorDiagnostics).sort(
+  ([a], [b]) => a - b,
+))
+  console.log(`${code}, // ${message}`);
+console.log("```");
 
 // ---
 
-function debugLog(...args: any[]) {
-  if (ENABLE_DEBUG) console.log(...args);
-}
-function debugErr(...args: any[]) {
-  if (ENABLE_DEBUG) console.error(...args);
-}
-
-// NOTE: `@ts-morph/bootstrap` is the most handy, but we should consider using `typescript` or `typescript-go`?
-// `typescript` is not a peer dependency of `@ts-morph/bootstrap`, so its version is uncontrollable for us.
-import { createProject, ts } from "@ts-morph/bootstrap";
-// TODO: Print it
-ts.version;
-
-// `filename` may be
 async function parseTypeScriptLikeOxc(filename: string, code: string) {
   const project = await createProject({
     useInMemoryFileSystem: true,
@@ -102,19 +139,21 @@ async function parseTypeScriptLikeOxc(filename: string, code: string) {
   const program = project.createProgram();
 
   // `ts.getPreEmitDiagnostics()` contains more diagnotics, but we do not need them
-  const errorDiagnostics = [
+  const allDiagnostics = [
     ...program.getSyntacticDiagnostics(),
     ...program.getSemanticDiagnostics(),
   ];
 
-  const errorDiagnosticsToBeVerified = new Map<number, string>();
-  for (const diagnostic of errorDiagnostics) {
-    // We only need critical errors
-    if (diagnostic.category !== ts.DiagnosticCategory.Error) continue;
+  return allDiagnostics;
+}
 
+function extractErrorDiagnosticsToBeSupported(diagnostics: ts.Diagnostic[]) {
+  const errorDiagnosticsToBeSupported = new Map<number, string>();
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.category !== ts.DiagnosticCategory.Error) continue;
     if (DIAGNOSTIC_CODES_OXC_DOES_NOT_SUPPORT.has(diagnostic.code)) continue;
 
-    errorDiagnosticsToBeVerified.set(
+    errorDiagnosticsToBeSupported.set(
       diagnostic.code,
       typeof diagnostic.messageText === "string"
         ? diagnostic.messageText
@@ -122,5 +161,19 @@ async function parseTypeScriptLikeOxc(filename: string, code: string) {
     );
   }
 
-  return errorDiagnosticsToBeVerified;
+  return errorDiagnosticsToBeSupported;
+}
+
+// ---
+
+function debugLog(...args: any[]) {
+  if (ENABLE_DEBUG) console.log(...args);
+}
+function debugErr(...args: any[]) {
+  if (ENABLE_DEBUG) console.error(...args);
+}
+function debugAssert(cond: boolean, message: string) {
+  if (!ENABLE_DEBUG || cond) return;
+  console.error("[Assertion failed]", message);
+  process.exit(1);
 }
