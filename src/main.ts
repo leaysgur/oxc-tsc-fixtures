@@ -5,54 +5,86 @@ import { glob } from "tinyglobby";
 // `typescript` is not a peer dependency of `@ts-morph/bootstrap`, so its version is uncontrollable for us.
 import { createProject, ts } from "@ts-morph/bootstrap";
 
-// TODO: List all codes that OXC does not support!
+// List all codes that OXC does not support!
 // e.g. Type-only, module resolution, etc...
 const DIAGNOSTIC_CODES_OXC_DOES_NOT_SUPPORT = new Set([
   2315, // Type 'U' is not generic.
   2322, // Type 'interfaceWithPublicAndOptional<number, string>' is not assignable to type '{ one: string; }'.
   2339, // Property 'protectedMethod' does not exist on type 'never'.
+  2349, // This expression is not callable.
   2355, // A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.
+  2365, // Operator '+' cannot be applied to types 'number' and '{}'.
+  2367, // This comparison appears to be unintentional because the types 'T' and '"x"' have no overlap.
   2403, // Subsequent variable declarations must have the same type.
   2416, // Property 'every' in type 'MyArray<T>' is not assignable to the same property in base type 'T[]'.
+  2430, // Interface 'Set<T>' incorrectly extends interface 'Collection<never, T>'.
+  2449, // Class 'Base' used before its declaration.
+  2506, // 'S18' is referenced directly or indirectly in its own base expression.
+  2540, // Cannot assign to 'B' because it is a read-only property.
+  2552, // Cannot find name 'myConst2'. Did you mean 'myConst1'?
+  2554, // Expected 2 arguments, but got 1.
+  2559, // Type 'bigint' has no properties in common with type '{ t?: string; }'.
+  2578, // Unused '@ts-expect-error' directive.
   2580, // Cannot find name 'module'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node`.
   2589, // Type instantiation is excessively deep and possibly infinite.
+  2661, // Cannot export 'globalThis'. Only local declarations can be exported from a module.
+  2664, // Invalid module name in augmentation, module 'ext' cannot be found.
+  2669, // Augmentations for the global scope can only be directly nested in external modules or ambient module declarations.
+  2688, // Cannot find type definition file for 'node'.
+  2693, // 'number' only refers to a type, but is being used as a value here.
+  2694, // Namespace 'mglo5' has no exported member 'i6'.
+  2739, // Type 'SharedArrayBuffer' is missing the following properties from type 'ArrayBuffer': resizable, resize, detached, transfer, transferToFixedLength
+  2741, // Property 'key' is missing in type '{ x: number; }' but required in type 'IntrinsicAttributes'.
   2792, // Cannot find module './file1'. Did you mean to set the 'moduleResolution' option to 'nodenext', or to add aliases to the 'paths' option?
   2872, // This kind of expression is always truthy.
   6053, // File '/declarations.d.ts' not found.
+  2551, // Property 'methodA' does not exist on type 'B'. Did you mean 'methodB'?
+  8020, // JSDoc types can only be used inside documentation comments.
+  18033, // Type '{}' is not assignable to type 'number' as required for computed enum member values.
+  // TODO: Add more and more!
 ]);
 
 // ---
 
 console.log("🍀", "Reesolving environment variables and dependencies");
-const ENABLE_DEBUG = process.env.DEBUG ? true : false;
+const IS_DEBUG = process.env.DEBUG ? true : false;
+const IS_UPDATE = process.env.NO_SAVE ? false : true;
 const TS_REPO_DIR = process.env.TS_REPO_DIR ?? "./typescript";
+console.log({ IS_DEBUG, IS_UPDATE, TS_REPO_DIR });
 
 const TEST_CATEGORIES = ["compiler", "conformance"];
 const TYPESCRIPT_REPO_ROOT = path.resolve(TS_REPO_DIR);
 
+console.log("🍀", "Using TS version:", ts.version);
 // NOTE: Should be rewritten by ourselves?
 const {
   TestCaseParser: { makeUnitsFromTest },
 } = await import(`${TYPESCRIPT_REPO_ROOT}/src/harness/harnessIO`);
-console.log("🍀", "Using TS version:", ts.version);
+
+const debugLog = IS_DEBUG ? console.log.bind(console) : () => {};
+const writeFile = IS_UPDATE ? fs.writeFile.bind(fs) : () => {};
+const rm = IS_UPDATE ? fs.rm.bind(fs) : () => {};
+const mkdir = IS_UPDATE ? fs.mkdir.bind(fs) : () => {};
+
+// ---
 
 console.log("🍀", "Cleaning up previous test results");
-await fs.rm("./fixtures", { recursive: true, force: true });
+await rm("./fixtures", { recursive: true, force: true });
 for (const testCategory of TEST_CATEGORIES) {
-  await fs.mkdir(`./fixtures/${testCategory}/positive`, { recursive: true });
-  await fs.mkdir(`./fixtures/${testCategory}/negative`, { recursive: true });
+  await mkdir(`./fixtures/${testCategory}/positive`, { recursive: true });
+  await mkdir(`./fixtures/${testCategory}/negative`, { recursive: true });
 }
 
 // TODO: Make it parallel!
 
 const reports: Record<string, any> = {};
-const supportedErrorDiagnostics = new Map<number, string>();
+const allErrorDiagnosticsToBeSupported = new Map<number, string>();
 for (const testCategory of TEST_CATEGORIES) {
   const cwd = `${TYPESCRIPT_REPO_ROOT}/tests/cases/${testCategory}`;
   const testFileNames = await glob(`**/*`, { cwd });
   console.log(
     "🍀",
-    `Processing test cases for "${testCategory}", ${testFileNames.length} items are found`,
+    `[${testCategory}] Processing ${testFileNames.length} test cases...`,
   );
 
   const stats = {
@@ -63,7 +95,9 @@ for (const testCategory of TEST_CATEGORIES) {
     const testText = await fs.readFile(path.resolve(cwd, testFileName), "utf8");
     const testUnits = makeUnitsFromTest(testText, testFileName);
 
-    debugLog(`${testFileName} - ${testUnits.testUnitData.length} unit(s)`);
+    debugLog(
+      `[${testCategory}] ${testFileName} - ${testUnits.testUnitData.length} unit(s)`,
+    );
     for (const {
       name: testUnitName,
       content: testUnitContent,
@@ -73,22 +107,12 @@ for (const testCategory of TEST_CATEGORIES) {
         continue;
       }
 
-      let diagnostics: ts.Diagnostic[] = [];
-      try {
-        diagnostics = await parseTypeScriptLikeOxc(
-          testUnitName,
-          testUnitContent,
-        );
-      } catch (_err) {
-        const err = _err as Error;
-        // NOTE: If `@types` options is used, TSC try to load it's type definitions!
-        if (err.message.startsWith("Directory not found:")) continue;
-        // TODO: これは例外処理しないとだめ？そもそもロードしないようにできない？
-        // e.g. moduleResolution/resolutionModeTripleSlash1.ts
-        // これ、関数の中に入れてもいい
-        console.error("[parseTypeScriptLikeOxc()]", err.message);
-        process.exit(1);
-      }
+      debugLog("👀", testUnitName);
+      const diagnostics = await parseTypeScriptLikeOxc(
+        testUnitName,
+        testUnitContent,
+        // TODO: Pass @xxx settings?
+      );
 
       const errorDiagnosticsToBeSupported =
         extractErrorDiagnosticsToBeSupported(diagnostics);
@@ -96,25 +120,21 @@ for (const testCategory of TEST_CATEGORIES) {
       // Both `testFileName` and `testUnitName` may contain `/`, but we don't care, just flatten them
       const fixtureName = `${testFileName}/${testUnitName}`.replaceAll(
         "/",
-        "___",
+        "+",
       );
       if (errorDiagnosticsToBeSupported.size === 0) {
-        debugLog("✨", testUnitName);
-        await fs.writeFile(
-          `./fixtures/${testCategory}/positive/${fixtureName}`,
-          testUnitContent,
-        );
+        const fixturePath = `./fixtures/${testCategory}/positive/${fixtureName}`;
+        await writeFile(fixturePath, testUnitContent);
+        debugLog(" └─", "✨", fixturePath);
         stats.positive++;
       } else {
-        debugErr("💥", testUnitName);
-        await fs.writeFile(
-          `./fixtures/${testCategory}/negative/${fixtureName}`,
-          testUnitContent,
-        );
+        const fixturePath = `./fixtures/${testCategory}/negative/${fixtureName}`;
+        await writeFile(fixturePath, testUnitContent);
+        debugLog(" └─", "💥", fixturePath);
         stats.negative++;
 
         for (const [code, message] of errorDiagnosticsToBeSupported)
-          supportedErrorDiagnostics.set(code, message);
+          allErrorDiagnosticsToBeSupported.set(code, message);
       }
     }
     debugLog();
@@ -125,17 +145,19 @@ for (const testCategory of TEST_CATEGORIES) {
 console.log("🍀", "Fixtures are written to `./fixtures`");
 console.log(reports);
 
+const sortedAllErrorDiagnosticsToBeSupported = new Map(
+  Array.from(allErrorDiagnosticsToBeSupported).sort(([a], [b]) => a - b),
+);
 console.log(
   "🍀",
-  `Writing supported ${supportedErrorDiagnostics.size} error diagnostics`,
+  `Writing ${sortedAllErrorDiagnosticsToBeSupported.size} error diagnostics to be supported`,
 );
-// TODO: Save supportted codes and log it for future update
-console.log("```js");
-for (const [code, message] of Array.from(supportedErrorDiagnostics).sort(
-  ([a], [b]) => a - b,
-))
+writeFile(
+  `./fixtures/error-codes-to-be-supported.txt`,
+  Array.from(sortedAllErrorDiagnosticsToBeSupported.keys()).join("\n"),
+);
+for (const [code, message] of sortedAllErrorDiagnosticsToBeSupported)
   console.log(`${code}, // ${message}`);
-console.log("```");
 
 // ---
 
@@ -145,7 +167,9 @@ function isSupportedTestUnit(fileName: string, fileContent: string) {
   if (fileContent.trim() === "") return false;
 
   // Skip if the test unit is not a TypeScript-like file
-  if (fileName.endsWith(".d.ts")) return false;
+  // e.g. `.json`, `.md`, `.css`, `.js.map`, etc...
+  if ([".d.ts", ".d.mts", ".d.cts"].some((ext) => fileName.endsWith(ext)))
+    return false;
   if (
     ![".js", ".ts", ".cts", ".mts", ".cjs", ".mjs", ".jsx", ".tsx"].some(
       (ext) => fileName.endsWith(ext),
@@ -170,6 +194,7 @@ async function parseTypeScriptLikeOxc(testUnitName: string, code: string) {
     },
   });
 
+  // PERF: Use flat file name
   project.createSourceFile(`dummy${ext}`, code);
   const program = project.createProgram();
 
@@ -197,13 +222,4 @@ function extractErrorDiagnosticsToBeSupported(diagnostics: ts.Diagnostic[]) {
   }
 
   return errorDiagnosticsToBeSupported;
-}
-
-// ---
-
-function debugLog(...args: any[]) {
-  if (ENABLE_DEBUG) console.log(...args);
-}
-function debugErr(...args: any[]) {
-  if (ENABLE_DEBUG) console.error(...args);
 }
