@@ -75,7 +75,7 @@ for (const testCategory of TEST_CATEGORIES) {
   await mkdir(`./fixtures/${testCategory}/negative`, { recursive: true });
 }
 
-// TODO: Make it parallel!
+// TODO: Make it parallel with `worker_threads`!
 
 const reports: Record<string, any> = {};
 const allErrorDiagnosticsToBeSupported = new Map<number, string>();
@@ -190,7 +190,7 @@ async function parseTypeScriptLikeOxc(testUnitName: string, code: string) {
       // OXC has no option equivalent, always parses the latest syntax
       target: ts.ScriptTarget.ESNext,
       jsx: ext.endsWith("x") ? ts.JsxEmit.Preserve : ts.JsxEmit.None,
-      // TODO: Add more options...?
+      // TODO: May need more options like `alwaysStrcict`, etc...
     },
   });
 

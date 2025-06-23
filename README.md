@@ -1,3 +1,6 @@
+> [!WARNING]
+> Considering both the execution and maintenance costs of this script, as well as the cost of integrating numerous files into CI, we determined it wasn't the ideal approach, so abandoned it.
+
 # oxc-tsc-fixtures
 
 Generate TypeScriptCompiler test fixtures for OXC.
@@ -42,6 +45,7 @@ Outputs are placed in `./fixtures/(compiler|conformance)/(positive|negative)`.
 ## TODOs
 
 - Perf...
+- Review other `@option`
 - Use `oxc-parser` w/ `checkSemantic: true` and precheck before integrating `oxc` repo
   - Parsed: passed + failed_not_panic / all_passed
   - Positive: passed / all_passed
